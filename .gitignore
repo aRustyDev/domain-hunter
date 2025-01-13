@@ -1,1 +1,4 @@
 /target
+.env
+.DS_Store
+cargo.log
