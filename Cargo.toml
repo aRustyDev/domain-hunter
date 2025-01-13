@@ -1,12 +1,13 @@
 [package]
 name = "domain-hunter"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
+dotenv = "0.15.0"
 # aws-sdk-route53domains = "1.56.0"
 # cloudflare = "0.11.0"
-# duckdb = { version = "1.1.1", features = ["bundled"] }
+duckdb = { version = "1.1.1", features = ["chrono", "serde_json", "url", "r2d2", "uuid", "vtab-full"] }
 itertools = "0.14.0"
 scraper = "0.22.0"
 thirtyfour = "0.35.0"

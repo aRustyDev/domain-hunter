@@ -1,3 +1,6 @@
+use crate::util::db::duck;
+use crate::util::db::duck::Domain;
+
 use thirtyfour::{DesiredCapabilities, WebDriver};
 use thirtyfour::prelude::*;
 use thirtyfour::components::SelectElement;
@@ -6,6 +9,7 @@ use scraper::{Html, Selector};
 use scraper::CaseSensitivity;
 use itertools::max;
 use tokio::time;
+use dotenv::dotenv;
 
 pub enum CrawlTarget {
     ExpiredDomainsDotCom,
@@ -49,6 +53,7 @@ struct FindBys {
 // }
 
 pub async fn basically_selenium(target: CrawlTarget) -> WebDriverResult<Vec<String>> {
+     dotenv().ok();
      let mut results = Vec::new();
      let mut caps = DesiredCapabilities::chrome();
 
@@ -122,6 +127,17 @@ pub async fn basically_selenium(target: CrawlTarget) -> WebDriverResult<Vec<Stri
     
      // Always explicitly close the browser.
      browser.quit().await?;
+
+     match dotenv::var("DB_TYPE").unwrap().as_str() {
+        "sql" => {
+          let conn = duck::db_init().unwrap();
+          for domain in &results {
+            duck::insert_domain(&conn, &Domain::new(domain, true, None)).unwrap();
+          }
+        },
+        "graph" => todo!(),
+        &_ => todo!(),
+     }
 
      Ok(results)
 }

@@ -1,5 +1,5 @@
 mod web_driver;
-// mod util;
+mod util;
 
 use crate::web_driver::expired_domains::*;
 // use util::bad_words::*;
