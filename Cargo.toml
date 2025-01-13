@@ -1,0 +1,55 @@
+[package]
+name = "domain-hunter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# aws-sdk-route53domains = "1.56.0"
+# cloudflare = "0.11.0"
+# duckdb = { version = "1.1.1", features = ["bundled"] }
+itertools = "0.14.0"
+scraper = "0.22.0"
+thirtyfour = "0.35.0"
+tokio = "1.43.0"
+
+[dev-dependencies]
+mockall = "0.13.1"
+
+[profile.release] # cargo build --release
+opt-level = 3
+debug = false
+strip = "debuginfo"
+debug-assertions = false
+overflow-checks = false
+lto = false
+panic = 'unwind'
+incremental = false
+codegen-units = 16
+rpath = false
+
+[profile.release-debug] # cargo build --profile release-debug
+inherits = "release"
+debug = true
+strip = "none"
+
+[profile.dev] # cargo build
+opt-level = 0
+debug = true
+strip = "none"
+debug-assertions = true
+overflow-checks = true
+lto = false
+panic = 'unwind'
+incremental = true
+codegen-units = 256
+rpath = false
+
+# https://doc.rust-lang.org/cargo/reference/profiles.html#overrides
+# Set the settings for build scripts and proc-macros.
+# [profile.dev.build-override] 
+# opt-level = 3
+
+# https://doc.rust-lang.org/cargo/reference/profiles.html#overrides
+# Set the default for dependencies.
+# [profile.dev.package."*"]
+# opt-level = 2
