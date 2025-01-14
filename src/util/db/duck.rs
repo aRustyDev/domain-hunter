@@ -41,6 +41,9 @@ pub enum DuckDbExportFormat {
 
 impl Domain {
     pub fn new(name: &String, available: bool, page_rank: Option<f64>) -> Self {
+        if name.contains(' ') {
+            panic!("Domain name cannot contain spaces");
+        }
         match page_rank {
             Some(page_rank) => Domain {
                 id: Some(Self::calculate_hash(&name)),
@@ -72,7 +75,6 @@ impl Domain {
 #[cfg(debug_assertions)]
 pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
     let mut stmt: Statement;
-    // tx.execute("USE main.dev", [])?; 
     stmt = tx.prepare("INSERT OR REPLACE INTO dev.domains (id, name, available, valid, page_rank, censored) VALUES (?, ?, ?, ?, ?, ?)")?;
     stmt.execute(params![
         domain.id,
@@ -88,7 +90,6 @@ pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
 #[cfg(not(debug_assertions))]
 pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
     let mut stmt: Statement;
-    tx.execute("USE memory.prod", [])?; 
     stmt = tx.prepare("INSERT OR REPLACE INTO prod.domains (id, name, available, valid, page_rank, censored) VALUES (?, ?, ?, ?, ?, ?)")?;
     stmt.execute(params![
         domain.id,
@@ -321,119 +322,57 @@ mod tests {
         tx.rollback().unwrap();
     }
 
-    // // Try to insert a duplicate domain
-    // #[test]
-    // fn test_insert_duplicate_domain() {
-    //     // Start a transaction
-    //     let mut conn = db_init(DuckDbType::InMemory).unwrap();
-    //     let tx = conn.transaction().unwrap();
+    // Try to insert a duplicate domain
+    #[test]
+    fn test_insert_duplicate_domain() {
+        // Start a transaction
+        let mut conn = db_init(DuckDbType::InMemory).unwrap();
+        let tx = conn.transaction().unwrap();
 
-    //     // Insert a domain
-    //     let insert = insert_domain(&tx, &Domain::new(&"test.com".to_string(), true, None));
-    //     assert!(insert.is_ok());
+        // Insert a domain
+        let insert = insert_domain(&tx, &Domain::new(&"test.com".to_string(), true, None));
+        assert!(insert.is_ok());
         
-    //     // Try to insert the same domain again
-    //     let insert = insert_domain(&tx, &Domain::new(&"test.com".to_string(), true, None));
-    //     assert!(insert.is_ok());
+        // Try to insert the same domain again
+        let insert = insert_domain(&tx, &Domain::new(&"test.com".to_string(), true, None));
+        assert!(insert.is_ok());
 
-    //     // Check if the domain was inserted more than once
-    //     let mut stmt = tx.prepare("SELECT name FROM dev.domains WHERE name = ?").unwrap();
-    //     let mut rows = stmt.query(["test.com"]).unwrap();
+        // Check if the domain was inserted more than once
+        let mut stmt = tx.prepare("SELECT name FROM dev.domains WHERE name = ?").unwrap();
+        let mut rows = stmt.query(["test.com"]).unwrap();
         
-    //     let mut names: Vec<String> = Vec::new();
-    //     while let Some(row) = rows.next().unwrap() {
-    //         names.push(row.get(0).unwrap());
-    //     }
-    //     assert_eq!(names.len(), 1);
+        let mut names: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            names.push(row.get(0).unwrap());
+        }
+        assert_eq!(names.len(), 1);
         
-    //     // Rollback the transaction
-    //     tx.rollback().unwrap();
-    // }
+        // Rollback the transaction
+        tx.rollback().unwrap();
+    }
 
-    // // Try to insert a domain with a bad name
-    // #[test]
-    // fn test_insert_bad_domain() {
-    //     let tx = "test_insert_bad_domain";
-    //     let mut conn = Connection::open_in_memory().unwrap();
-    //     // Start a transaction
-    //     let sp = conn.execute("SAVEPOINT ?", params![tx]);
-    //     assert!(sp.is_ok());
+    // Try to insert a domain with a bad name
+    #[test]
+    #[should_panic]
+    fn test_insert_bad_domain() {
+        // Start a transaction
+        let mut conn = db_init(DuckDbType::InMemory).unwrap();
+        let tx = conn.transaction().unwrap();
 
-    //     // Insert a domain
-    //     let insert = insert_domain(&mut conn, &Domain::new(&"test com".to_string(), true, None));
-    //     assert!(insert.is_ok());
-
-    //     // Check if the domain was inserted more than once
-    //     let query = conn.execute("SELECT name FROM dev.domains WHERE name = ?", ["test com"]);
-    //     assert!(query.is_ok());
-    //     // assert_eq!(query.unwrap().len(), 1);
+        // Insert a domain
+        let insert = insert_domain(&tx, &Domain::new(&"test com".to_string(), true, None));
         
-    //     // Rollback the transaction
-    //     let _ = conn.execute("ROLLBACK TO SAVEPOINT ?", params![tx]);
-    //     let _ = conn.execute("RELEASE SAVEPOINT ?", params![tx]);
-    // }
+        // Rollback the transaction
+        tx.rollback().unwrap();
+    }
 
-    // // Try to insert a domain with a bad page rank
-    // #[test]
-    // fn test_insert_domain_test_page_rank() {
-    //     let tx = "test_insert_domain_test_page_rank";
-    //     let mut conn = Connection::open_in_memory().unwrap();
-    //     // Start a transaction
-    //     let mut sp = conn.savepoint_with_name(tx).unwrap();
-
-    //     // Insert a domain
-    //     let insert = insert_domain(&mut conn, &Domain::new(&"test.com".to_string(), true, None));
-    //     assert!(insert.is_ok());
-
-    //     // Check if the domain was inserted more than once
-    //     let query = conn.execute("SELECT name FROM dev.domains WHERE name = ?", ["test.com"]);
-    //     assert!(query.is_ok());
-    //     // assert_eq!(query.unwrap().len(), 1);
-        
-    //     // Rollback the transaction
-    //     let _ = sp.rollback().unwrap();
-    // }
-
-    // // Try to insert a domain with a bad censored value
-    // #[test]
-    // fn test_insert_censored_domain() {
-    //     let mut conn = db_init().unwrap();
-    // }
-
-    // // Try to insert a domain with a bad available value
-    // #[test]
-    // fn test_insert_domain_test_available() {
-    //     let mut conn = db_init().unwrap();
-    // }
-
-    // // Try to Load a CSV file
-    // #[test]
-    // fn test_load_csv() {
-    //     let mut conn = db_init().unwrap();
-    // }
-
-    // // Try to Load a CSV file that doesn't exist
-    // #[test]
-    // fn test_load_csv_doesnt_exist() {
-    //     let mut conn = db_init().unwrap();
-    // }
-
-    // // Try to export a CSV file
-    // #[test]
-    // fn test_export_csv() {
-    //     let mut conn = db_init().unwrap();
-    // }
-
-    // // Try to export a Parquet file
-    // #[test]
-    // fn test_export_parquet() {
-    //     let mut conn = db_init().unwrap();
-    // }
-
-    // // Verify that the rollbacks work
-    // #[test]
-    // fn test_rollback() {
-    //     let mut conn = db_init().unwrap();
-    // }
+    // TODO: Try to insert a domain with a bad page rank
+    // TODO: Try to insert a domain with a bad censored value
+    // TODO: Try to insert a domain with a bad available value
+    // TODO: Try to Load a CSV file
+    // TODO: Try to Load a CSV file that doesn't exist
+    // TODO: Try to export a CSV file
+    // TODO: Try to export a Parquet file
+    // TODO: Verify that the rollbacks work
 
 }
