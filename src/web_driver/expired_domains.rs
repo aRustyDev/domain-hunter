@@ -1,5 +1,6 @@
 use crate::util::db::duck;
 use crate::util::db::duck::Domain;
+use crate::util::db::duck::DuckDbType;
 
 use thirtyfour::{DesiredCapabilities, WebDriver};
 use thirtyfour::prelude::*;
@@ -130,10 +131,12 @@ pub async fn basically_selenium(target: CrawlTarget) -> WebDriverResult<Vec<Stri
 
      match dotenv::var("DB_TYPE").unwrap().as_str() {
         "sql" => {
-          let conn = duck::db_init().unwrap();
+          let mut conn = duck::db_init(DuckDbType::Persistent).unwrap();
+          let tx = conn.transaction().unwrap();
           for domain in &results {
-            duck::insert_domain(&conn, &Domain::new(domain, true, None)).unwrap();
+            duck::insert_domain(&tx, &Domain::new(domain, true, None)).unwrap();
           }
+          tx.commit().unwrap();
         },
         "graph" => todo!(),
         &_ => todo!(),

@@ -1,5 +1,9 @@
 use duckdb::{params, Connection, Result};
+use duckdb::Statement;
+use duckdb::Transaction;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use dotenv::dotenv;
+use std::env;
 
 #[derive(Debug, Clone)]
 pub struct Domain {
@@ -9,6 +13,30 @@ pub struct Domain {
     valid: Option<bool>,
     pub page_rank: Option<f64>,
     censored: Option<bool>,
+}
+
+pub enum DuckDbType {
+    InMemory,
+    Persistent,
+    Existing
+}
+pub enum DuckDbImportSource {
+    Csv,
+    Json,
+    Parquet,
+    SQLite,
+    PostgreSQL,
+    MySQL,
+    Iceberg,
+    DeltaLake,
+    CloudflareR2,
+    AzureBlob,
+    S3
+}
+
+pub enum DuckDbExportFormat {
+    Csv,
+    Parquet
 }
 
 impl Domain {
@@ -42,8 +70,10 @@ impl Domain {
 
 // TODO: Can this take an iterator?
 #[cfg(debug_assertions)]
-pub fn insert_domain(conn: &Connection, domain: &Domain) -> Result<()> {
-    let mut stmt = conn.prepare("INSERT OR REPLACE id, name, available, valid, page_rank, censored INTO dev.domains VALUES (?, ?, ?, ?, ?, ?)")?;
+pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
+    let mut stmt: Statement;
+    // tx.execute("USE main.dev", [])?; 
+    stmt = tx.prepare("INSERT OR REPLACE INTO dev.domains (id, name, available, valid, page_rank, censored) VALUES (?, ?, ?, ?, ?, ?)")?;
     stmt.execute(params![
         domain.id,
         domain.name,
@@ -55,22 +85,11 @@ pub fn insert_domain(conn: &Connection, domain: &Domain) -> Result<()> {
     Ok(())
 }
 
-// #[cfg(not(debug_assertions))]
-// pub insert_domain(conn: &Connection, domain: &Domain) -> Result<()> {
-//     let mut stmt = conn.prepare("INSERT OR REPLACE id, name, available, valid, page_rank, censored INTO prod.domains VALUES (?, ?, ?, ?, ?, ?)")?;
-//     stmt.execute(params![
-//         domain.id,
-//         domain.name,
-//         domain.available,
-//         domain.valid,
-//         domain.page_rank,
-//         domain.censored,
-//     ])?;
-//     Ok(())
-// }
-
-pub fn update_domains(conn: &Connection, domain: &Domain) -> Result<()> {
-    let mut stmt = conn.prepare("UPDATE id, name, available, valid, page_rank, censored INTO dev.domains VALUES (?, ?, ?, ?, ?, ?)")?;
+#[cfg(not(debug_assertions))]
+pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
+    let mut stmt: Statement;
+    tx.execute("USE memory.prod", [])?; 
+    stmt = tx.prepare("INSERT OR REPLACE INTO prod.domains (id, name, available, valid, page_rank, censored) VALUES (?, ?, ?, ?, ?, ?)")?;
     stmt.execute(params![
         domain.id,
         domain.name,
@@ -79,6 +98,22 @@ pub fn update_domains(conn: &Connection, domain: &Domain) -> Result<()> {
         domain.page_rank,
         domain.censored,
     ])?;
+    Ok(())
+}
+
+pub fn update_domains(conn: &mut Connection, domain: &Domain) -> Result<()> {
+    let mut stmt: Statement;
+    let tx = conn.transaction()?;
+    stmt = tx.prepare("UPDATE id, name, available, valid, page_rank, censored INTO dev.domains VALUES (?, ?, ?, ?, ?, ?)")?;
+    stmt.execute(params![
+        domain.id,
+        domain.name,
+        domain.available,
+        domain.valid,
+        domain.page_rank,
+        domain.censored,
+    ])?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -94,8 +129,69 @@ pub fn list_valid_domains(conn: &Connection) -> Result<Vec<String>> {
     Ok(domains)
 }
 
-pub fn db_init() -> Result<Connection> {
-    let mut conn = Connection::open_in_memory()?;
+pub fn db_init(db_type: DuckDbType) -> Result<Connection> {
+    match db_type {
+        DuckDbType::InMemory => {
+            let mut conn = Connection::open_in_memory()?;
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch("
+                CREATE SCHEMA IF NOT EXISTS dev;
+                CREATE TYPE domainLanguage AS ENUM ('en', 'se', 'de', 'fr', 'es');
+                CREATE TYPE tld AS ENUM ('.com', '.net', '.org');
+                CREATE TABLE IF NOT EXISTS dev.domains (
+                    id          UBIGINT PRIMARY KEY,
+                    name        VARCHAR CHECK (NOT contains(name, ' ')),
+                    available   BOOLEAN DEFAULT NULL,
+                    valid       BOOLEAN DEFAULT NULL,
+                    page_rank   DECIMAL DEFAULT 0,
+                    censored    BOOLEAN DEFAULT NULL
+                );
+                COMMENT ON TABLE dev.domains IS 'All domains from expired-domains.co';
+                COMMENT ON COLUMN dev.domains.id IS 'random uuid';
+                COMMENT ON COLUMN dev.domains.name IS 'domain name';
+                COMMENT ON COLUMN dev.domains.available IS 'was domain available at the time of the scan';
+                COMMENT ON COLUMN dev.domains.valid IS 'is domain still available';
+                COMMENT ON COLUMN dev.domains.page_rank IS 'page rank score from expired-domains.co';
+                COMMENT ON COLUMN dev.domains.censored IS 'did domain fail to pass the censor check (true == bad words found)';",
+            ).unwrap();
+            tx.commit().unwrap();
+            Ok(conn)
+        },
+        DuckDbType::Persistent => {
+            dotenv().ok();
+            let dbpath = env::var("DUCKDB_PATH").unwrap_or("./data/duck.db".to_string());
+            let mut conn = Connection::open(&dbpath)?;
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch("
+                CREATE SCHEMA IF NOT EXISTS dev;
+                CREATE TYPE domainLanguage AS ENUM ('en', 'se', 'de', 'fr', 'es');
+                CREATE TYPE tld AS ENUM ('.com', '.net', '.org');
+                CREATE TABLE IF NOT EXISTS dev.domains (
+                    id          UBIGINT PRIMARY KEY,
+                    name        VARCHAR CHECK (NOT contains(name, ' ')),
+                    available   BOOLEAN DEFAULT NULL,
+                    valid       BOOLEAN DEFAULT NULL,
+                    page_rank   DECIMAL DEFAULT 0,
+                    censored    BOOLEAN DEFAULT NULL
+                );
+                COMMENT ON TABLE dev.domains IS 'All domains from expired-domains.co';
+                COMMENT ON COLUMN dev.domains.id IS 'random uuid';
+                COMMENT ON COLUMN dev.domains.name IS 'domain name';
+                COMMENT ON COLUMN dev.domains.available IS 'was domain available at the time of the scan';
+                COMMENT ON COLUMN dev.domains.valid IS 'is domain still available';
+                COMMENT ON COLUMN dev.domains.page_rank IS 'page rank score from expired-domains.co';
+                COMMENT ON COLUMN dev.domains.censored IS 'did domain fail to pass the censor check (true == bad words found)';",
+            ).unwrap();
+            tx.commit().unwrap();
+            Ok(conn)
+        },
+        DuckDbType::Existing => {
+            dotenv().ok();
+            let dbpath = env::var("DUCKDB_PATH").unwrap_or("./data/duck.db".to_string());
+            let conn = Connection::open(&dbpath)?;
+            Ok(conn)
+        }
+    }
     // conn.execute("PRAGMA journal_mode = WAL")?;
     // conn.execute("PRAGMA synchronous = NORMAL")?;
     // conn.execute("PRAGMA temp_store = MEMORY")?;
@@ -106,9 +202,238 @@ pub fn db_init() -> Result<Connection> {
     // conn.execute("PRAGMA default_cache_size = 10000")?;
     // conn.execute("PRAGMA wal_autocheckpoint = 1000")?;
     // conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")?;
-    Ok(conn)
 }
 
-// db_import()
+pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> Result<()> {
+    dotenv().ok();
+    let src_directory = env::var("DUCKDB_EXPORT_TARGET_DIRECTORY").unwrap_or("./duckdb".to_string());
+    let mut stmt: Statement;
+    let tx = conn.transaction()?;
 
-// db_export()
+    match source {
+        Some(DuckDbImportSource::Csv) => todo!(),
+        Some(DuckDbImportSource::Json) => todo!(),
+        Some(DuckDbImportSource::Parquet) => todo!(),
+        Some(DuckDbImportSource::SQLite) => todo!(),
+        Some(DuckDbImportSource::PostgreSQL) => todo!(),
+        Some(DuckDbImportSource::MySQL) => {
+            tx.execute_batch("BEGIN;
+                        INSTALL mysql;
+                        LOAD mysql;",
+            )?;
+            Ok(())
+        },
+        Some(DuckDbImportSource::Iceberg) => {
+            tx.execute_batch("BEGIN;
+                        INSTALL iceberg;
+                        LOAD iceberg;
+                        UPDATE EXTENSIONS (iceberg);",
+            )?;
+            Ok(())
+        },
+        Some(DuckDbImportSource::DeltaLake) => {
+            tx.execute_batch("BEGIN;
+                        INSTALL delta;
+                        LOAD delta;",
+            )?;
+            Ok(())
+        },
+        Some(DuckDbImportSource::CloudflareR2) => todo!(),
+        Some(DuckDbImportSource::AzureBlob) => todo!(),
+        Some(DuckDbImportSource::S3) => todo!(),
+        _ => {
+            stmt = tx.prepare(r"IMPORT DATABASE '?';")?;
+            match stmt.execute([src_directory]) {
+                Ok(_) => {
+                    tx.commit()?;
+                    Ok(())
+                },
+                Err(e) => {
+                    tx.rollback()?;
+                    Err(e)
+                },
+            }
+        }
+    }
+}
+
+pub fn db_export(conn: &mut Connection, format: DuckDbExportFormat) -> Result<()> {
+    dotenv().ok();
+    let target_directory = env::var("DUCKDB_EXPORT_TARGET_DIRECTORY").unwrap_or("./duckdb".to_string());
+    let mut stmt: Statement;
+    let tx = conn.transaction()?;
+
+    match format {
+        DuckDbExportFormat::Parquet => {
+            stmt = tx.prepare(
+              r"EXPORT DATABASE '?' (
+                    FORMAT PARQUET,
+                    COMPRESSION ZSTD,
+                    ROW_GROUP_SIZE 100_000
+                );
+              ")?;
+        },
+        DuckDbExportFormat::Csv => {
+            stmt = tx.prepare(
+              r"EXPORT DATABASE '?' (
+                    FORMAT CSV, 
+                    DELIMITER '|'
+                );")?;
+        },
+    }
+    
+    match stmt.execute([target_directory]) {
+        Ok(_) => {
+            tx.commit()?;
+            Ok(())
+        },
+        Err(e) => {
+            tx.rollback()?;
+            Err(e)
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_insert_domain() {
+        let mut conn = db_init(DuckDbType::InMemory).unwrap();
+        let tx = conn.transaction().unwrap();
+
+        // Insert a domain
+        let insert = insert_domain(&tx, &Domain::new(&"test.com".to_string(), true, None));
+        assert!(insert.is_ok());
+
+        // Check if the domain was inserted
+        let mut stmt = tx.prepare("SELECT name FROM dev.domains WHERE name = ?").unwrap();
+        let mut rows = stmt.query(["test.com"]).unwrap();
+        
+        let mut names: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            names.push(row.get(0).unwrap());
+        }
+        assert_eq!(names.len(), 1);
+        
+        // Rollback the transaction
+        tx.rollback().unwrap();
+    }
+
+    // // Try to insert a duplicate domain
+    // #[test]
+    // fn test_insert_duplicate_domain() {
+    //     // Start a transaction
+    //     let mut conn = db_init(DuckDbType::InMemory).unwrap();
+    //     let tx = conn.transaction().unwrap();
+
+    //     // Insert a domain
+    //     let insert = insert_domain(&tx, &Domain::new(&"test.com".to_string(), true, None));
+    //     assert!(insert.is_ok());
+        
+    //     // Try to insert the same domain again
+    //     let insert = insert_domain(&tx, &Domain::new(&"test.com".to_string(), true, None));
+    //     assert!(insert.is_ok());
+
+    //     // Check if the domain was inserted more than once
+    //     let mut stmt = tx.prepare("SELECT name FROM dev.domains WHERE name = ?").unwrap();
+    //     let mut rows = stmt.query(["test.com"]).unwrap();
+        
+    //     let mut names: Vec<String> = Vec::new();
+    //     while let Some(row) = rows.next().unwrap() {
+    //         names.push(row.get(0).unwrap());
+    //     }
+    //     assert_eq!(names.len(), 1);
+        
+    //     // Rollback the transaction
+    //     tx.rollback().unwrap();
+    // }
+
+    // // Try to insert a domain with a bad name
+    // #[test]
+    // fn test_insert_bad_domain() {
+    //     let tx = "test_insert_bad_domain";
+    //     let mut conn = Connection::open_in_memory().unwrap();
+    //     // Start a transaction
+    //     let sp = conn.execute("SAVEPOINT ?", params![tx]);
+    //     assert!(sp.is_ok());
+
+    //     // Insert a domain
+    //     let insert = insert_domain(&mut conn, &Domain::new(&"test com".to_string(), true, None));
+    //     assert!(insert.is_ok());
+
+    //     // Check if the domain was inserted more than once
+    //     let query = conn.execute("SELECT name FROM dev.domains WHERE name = ?", ["test com"]);
+    //     assert!(query.is_ok());
+    //     // assert_eq!(query.unwrap().len(), 1);
+        
+    //     // Rollback the transaction
+    //     let _ = conn.execute("ROLLBACK TO SAVEPOINT ?", params![tx]);
+    //     let _ = conn.execute("RELEASE SAVEPOINT ?", params![tx]);
+    // }
+
+    // // Try to insert a domain with a bad page rank
+    // #[test]
+    // fn test_insert_domain_test_page_rank() {
+    //     let tx = "test_insert_domain_test_page_rank";
+    //     let mut conn = Connection::open_in_memory().unwrap();
+    //     // Start a transaction
+    //     let mut sp = conn.savepoint_with_name(tx).unwrap();
+
+    //     // Insert a domain
+    //     let insert = insert_domain(&mut conn, &Domain::new(&"test.com".to_string(), true, None));
+    //     assert!(insert.is_ok());
+
+    //     // Check if the domain was inserted more than once
+    //     let query = conn.execute("SELECT name FROM dev.domains WHERE name = ?", ["test.com"]);
+    //     assert!(query.is_ok());
+    //     // assert_eq!(query.unwrap().len(), 1);
+        
+    //     // Rollback the transaction
+    //     let _ = sp.rollback().unwrap();
+    // }
+
+    // // Try to insert a domain with a bad censored value
+    // #[test]
+    // fn test_insert_censored_domain() {
+    //     let mut conn = db_init().unwrap();
+    // }
+
+    // // Try to insert a domain with a bad available value
+    // #[test]
+    // fn test_insert_domain_test_available() {
+    //     let mut conn = db_init().unwrap();
+    // }
+
+    // // Try to Load a CSV file
+    // #[test]
+    // fn test_load_csv() {
+    //     let mut conn = db_init().unwrap();
+    // }
+
+    // // Try to Load a CSV file that doesn't exist
+    // #[test]
+    // fn test_load_csv_doesnt_exist() {
+    //     let mut conn = db_init().unwrap();
+    // }
+
+    // // Try to export a CSV file
+    // #[test]
+    // fn test_export_csv() {
+    //     let mut conn = db_init().unwrap();
+    // }
+
+    // // Try to export a Parquet file
+    // #[test]
+    // fn test_export_parquet() {
+    //     let mut conn = db_init().unwrap();
+    // }
+
+    // // Verify that the rollbacks work
+    // #[test]
+    // fn test_rollback() {
+    //     let mut conn = db_init().unwrap();
+    // }
+
+}
