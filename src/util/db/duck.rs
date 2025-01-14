@@ -4,6 +4,8 @@ use duckdb::Transaction;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use dotenv::dotenv;
 use std::env;
+use std::path::Path;
+use std::fs;
 
 #[derive(Debug, Clone)]
 pub struct Domain {
@@ -20,6 +22,7 @@ pub enum DuckDbType {
     Persistent,
     Existing
 }
+
 pub enum DuckDbImportSource {
     Csv,
     Json,
@@ -130,7 +133,7 @@ pub fn list_valid_domains(conn: &Connection) -> Result<Vec<String>> {
     Ok(domains)
 }
 
-pub fn db_init(db_type: DuckDbType) -> Result<Connection> {
+pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
     match db_type {
         DuckDbType::InMemory => {
             let mut conn = Connection::open_in_memory()?;
@@ -160,7 +163,15 @@ pub fn db_init(db_type: DuckDbType) -> Result<Connection> {
         },
         DuckDbType::Persistent => {
             dotenv().ok();
-            let dbpath = env::var("DUCKDB_PATH").unwrap_or("./data/duck.db".to_string());
+            let dbpath = env::var("DUCKDB_PATH").unwrap_or("./data/domain-hunter.duckdb".to_string());
+            if !Path::new(&dbpath).exists() {
+                match fs::create_dir_all(Path::new(&dbpath)) {
+                    Ok(_) => {},
+                    Err(_) => {
+                        return Err(duckdb::Error::InvalidPath((&dbpath).into()));
+                    }
+                }
+            }
             let mut conn = Connection::open(&dbpath)?;
             let tx = conn.transaction().unwrap();
             tx.execute_batch("
@@ -374,5 +385,6 @@ mod tests {
     // TODO: Try to export a CSV file
     // TODO: Try to export a Parquet file
     // TODO: Verify that the rollbacks work
+    // TODO: Verify DuckDbType::Persistent creates a new DB
 
 }
