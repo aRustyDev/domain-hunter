@@ -1,3 +1,8 @@
+CREATE TABLE IF NOT EXISTS bad_words (
+  id          UBIGINT PRIMARY KEY,
+  string      VARCHAR(100) CHECK (NOT contains(string, ' ')),
+  weight      DECIMAL DEFAULT 0
+);
 INSERT OR REPLACE INTO bad_words (id,string,weight) VALUES ( hash('abbo'),'abbo', 0 );
 INSERT OR REPLACE INTO bad_words (id,string,weight) VALUES ( hash('abo'),'abo', 0 );
 INSERT OR REPLACE INTO bad_words (id,string,weight) VALUES ( hash('abortion'),'abortion', 0 );
