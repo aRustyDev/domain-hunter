@@ -1,0 +1,46 @@
+{
+  "resource_spans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "cx.application.name",
+            "value": {
+              "string_value": "my-test-application"
+            }
+          },
+          {
+            "key": "cx.subsystem.name",
+            "value": {
+              "string_value": "my-test-subsystem"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "string_value": "my-test-service"
+            }
+          }
+        ]
+      },
+      "scope_spans": [
+        {
+          "scope": {
+            "name": "test"
+          },
+          "spans": [
+            {
+              "trace_id": "d0XALf50O6rdjlMxreTJsA==",
+              "span_id": "YolJ2eFjJCs=",
+              "name": "test-span",
+              "kind": "SPAN_KIND_INTERNAL",
+              "start_time_unix_nano": "1737649727",
+              "end_time_unix_nano":   "1737650747",
+              "status": {}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
