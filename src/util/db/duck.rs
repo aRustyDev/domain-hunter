@@ -201,7 +201,8 @@ pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
         },
         DuckDbType::Persistent => {
             dotenv().ok();
-            let dbpath = env::var("DUCKDB_PATH").unwrap_or("./data/domain-hunter.duckdb".to_string());
+            // let dbpath = env::var("DUCKDB_PATH").unwrap_or("./data/domain-hunter.duckdb".to_string());
+            let dbpath = "./data/domain-hunter.duckdb";
             if !Path::new(&dbpath).exists() {
                 match fs::create_dir_all(Path::new(&dbpath)) {
                     Ok(_) => {},
@@ -211,6 +212,7 @@ pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
                 }
             }
             let mut conn = Connection::open(&dbpath)?;
+            println!("DB PATH: {:?}", conn.path());
             let tx = conn.transaction().unwrap();
             tx.execute_batch("
                 CREATE SCHEMA IF NOT EXISTS dev;
