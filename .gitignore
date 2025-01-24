@@ -4,3 +4,4 @@
 cargo.log
 
 docker/opentelemetry-proto
+data/domain-hunter.duckdb/
