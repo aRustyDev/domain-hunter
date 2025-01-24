@@ -1,0 +1,87 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        # tls:
+        #   cert_file: cert.pem
+        #   key_file: cert-key.pem
+      http:
+        endpoint: 0.0.0.0:4318
+# ==============================================================================
+processors:
+  batch:
+  # attributes:
+  #   actions:
+  #     - key: environment
+  #       value: production
+  #       action: insert
+  #     - key: db.statement
+  #       action: delete
+  #     - key: email
+  #       action: hash
+  # resource:
+  #   attributes:
+  #     - key: cloud.zone
+  #       value: zone-1
+  #       action: upsert
+  #     - key: k8s.cluster.name
+  #       from_attribute: k8s-cluster
+  #       action: insert
+  #     - key: redundant-attribute
+  #       action: delete
+  # span:
+  #   name:
+  #     to_attributes:
+  #       rules:
+  #         - ^\/api\/v1\/document\/(?P<documentId>.*)\/update$
+  #     from_attributes: [db.svc, operation]
+  #     separator: '::'
+
+# ==============================================================================
+exporters:
+  otlp:
+    endpoint: otelcol:4317
+    tls:
+      insecure: true
+  otlp/jaeger:
+    endpoint: jaeger-all-in-one:14317
+    tls:
+      insecure: true
+  prometheus:
+    endpoint: "0.0.0.0:9090"
+    namespace: default
+    const_labels:
+      label1: value1
+  debug:
+    verbosity: detailed
+  otlphttp:
+    endpoint: "http://jaeger-all-in-one:14318"
+  zipkin:
+    endpoint: "http://localhost:9411/api/v2/spans"
+  # kafka:
+  #   protocol_version: 2.0.0
+  # # Data sources: traces, metrics
+  # opencensus:
+  #   endpoint: otelcol2:55678
+# ==============================================================================
+extensions:
+  health_check:
+  pprof:
+  zpages:
+# ==============================================================================
+service:
+  extensions: [health_check, pprof, zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, otlp/jaeger]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

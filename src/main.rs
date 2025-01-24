@@ -1,37 +1,50 @@
 mod web_driver;
 mod util;
-mod util::tracing;
 
-use crate::util::tracing::otel::init_tracer_provider;
+use opentelemetry::{global, trace::TracerProvider as _, KeyValue};
+use opentelemetry_sdk::{
+    metrics::{MeterProviderBuilder, PeriodicReader, SdkMeterProvider},
+    runtime,
+    trace::{RandomIdGenerator, Sampler, TracerProvider},
+    Resource,
+};
+use opentelemetry_semantic_conventions::{
+    attribute::{DEPLOYMENT_ENVIRONMENT_NAME, SERVICE_NAME, SERVICE_VERSION},
+    SCHEMA_URL,
+};
+use tracing_core::Level;
+use tracing_opentelemetry::{MetricsLayer, OpenTelemetryLayer};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use std::error::Error;
+
+use crate::util::tracing::*;
 use crate::web_driver::expired_domains::*;
 // use util::bad_words::*;
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
-    let tracer_provider = init_tracer_provider().expect("Failed to initialize tracer provider.");
-    global::set_tracer_provider(tracer_provider.clone());
+// ==================================================================================================
+// Main
+// ==================================================================================================
 
-    let tracer = global::tracer("tracing-jaeger");
-    tracer.in_span("main", |cx| {
-        let span = cx.span();
-        span.set_attribute(KeyValue::new("my-attribute", "my-value"));
-        span.add_event(
-            "Main span event".to_string(),
-            vec![KeyValue::new("foo", "1")],
-        );
-        tracer.in_span("child-operation...", |cx| {
-            let span = cx.span();
-            span.add_event("Sub span event", vec![KeyValue::new("bar", "1")]);
-        });
-    });
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    let _guard = init_tracing_subscriber();
 
-    // let tracer = global::tracer("domain-hunter");
-    // let mut span = tracer.start("main");
+    // foo().await;
 
-    // let bad_words = get_bad_words(BadWordSource::File).unwrap();
-    println!("{:?}", basically_selenium(CrawlTarget::ExpiredDomainsDotCom).await.unwrap());
+    let domains = basically_selenium(CrawlTarget::ExpiredDomainsDotCom).await;
+    // println!("{:?}", domains);
 
+    Ok(())
+}
 
-    tracer_provider.shutdown()?;
-    span.end();
+#[tracing::instrument]
+async fn foo() {
+    tracing::info!(
+        monotonic_counter.foo = 1_u64,
+        key_1 = "bar",
+        key_2 = 10,
+        "handle foo",
+    );
+
+    tracing::info!(histogram.baz = 10, "histogram example",);
 }

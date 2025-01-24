@@ -1,11 +1,27 @@
-use duckdb::{params, Connection, Result};
-use duckdb::Statement;
-use duckdb::Transaction;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use duckdb::{
+    params,
+    Connection,
+    Result,
+    Statement,
+    Transaction
+};
 use dotenv::dotenv;
-use std::env;
-use std::path::Path;
-use std::fs;
+use std::{
+    env,
+    path::Path,
+    fs,
+    hash::{
+        DefaultHasher,
+        Hash,
+        Hasher
+    }
+};
+
+use opentelemetry::{
+    Context,
+    global,
+    trace::{Tracer, Span}
+};
 
 #[derive(Debug, Clone)]
 pub struct Domain {
@@ -17,12 +33,14 @@ pub struct Domain {
     censored: Option<bool>,
 }
 
+#[derive(Debug)]
 pub enum DuckDbType {
     InMemory,
     Persistent,
     Existing
 }
 
+#[derive(Debug)]
 pub enum DuckDbImportSource {
     Csv,
     Json,
@@ -37,6 +55,7 @@ pub enum DuckDbImportSource {
     S3
 }
 
+#[derive(Debug)]
 pub enum DuckDbExportFormat {
     Csv,
     Parquet
@@ -75,8 +94,11 @@ impl Domain {
 }
 
 // TODO: Can this take an iterator?
+#[tracing::instrument]
 #[cfg(debug_assertions)]
 pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
+    // let tracer = global::tracer("domain-hunter");
+    // let mut span = tracer.start_with_context("insert_domain", &ctx);
     let mut stmt: Statement;
     stmt = tx.prepare("INSERT OR REPLACE INTO dev.domains (id, name, available, valid, page_rank, censored) VALUES (?, ?, ?, ?, ?, ?)")?;
     stmt.execute(params![
@@ -87,11 +109,15 @@ pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
         domain.page_rank,
         domain.censored,
     ])?;
+    // span.end();
     Ok(())
 }
 
+#[tracing::instrument]
 #[cfg(not(debug_assertions))]
 pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
+    // let tracer = global::tracer("domain-hunter");
+    // let mut span = tracer.start_with_context("insert_domain", &ctx);
     let mut stmt: Statement;
     stmt = tx.prepare("INSERT OR REPLACE INTO prod.domains (id, name, available, valid, page_rank, censored) VALUES (?, ?, ?, ?, ?, ?)")?;
     stmt.execute(params![
@@ -102,10 +128,14 @@ pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
         domain.page_rank,
         domain.censored,
     ])?;
+    // span.end();
     Ok(())
 }
 
+#[tracing::instrument]
 pub fn update_domains(conn: &mut Connection, domain: &Domain) -> Result<()> {
+    // let tracer = global::tracer("domain-hunter");
+    // let mut span = tracer.start_with_context("update_domains", &ctx);
     let mut stmt: Statement;
     let tx = conn.transaction()?;
     stmt = tx.prepare("UPDATE id, name, available, valid, page_rank, censored INTO dev.domains VALUES (?, ?, ?, ?, ?, ?)")?;
@@ -118,10 +148,14 @@ pub fn update_domains(conn: &mut Connection, domain: &Domain) -> Result<()> {
         domain.censored,
     ])?;
     tx.commit()?;
+    // span.end();
     Ok(())
 }
 
+#[tracing::instrument]
 pub fn list_valid_domains(conn: &Connection) -> Result<Vec<String>> {
+    // let tracer = global::tracer("domain-hunter");
+    // let mut span = tracer.start_with_context("list_valid_domains", &ctx);
     let mut stmt = conn.prepare("SELECT name FROM dev.domains WHERE valid = true AND page_rank > 0 AND name LIKE '%.com' AND name LIKE '%.net' AND name LIKE '%.org' AND censored = false")?;
     let mut rows = stmt.query([])?;
 
@@ -129,11 +163,14 @@ pub fn list_valid_domains(conn: &Connection) -> Result<Vec<String>> {
     while let Some(row) = rows.next()? {
         domains.push(row.get(0)?);
     }
-    
+    // span.end();
     Ok(domains)
 }
 
+#[tracing::instrument]
 pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
+    // let tracer = global::tracer("domain-hunter");
+    // let mut span = tracer.start_with_context("db_init", &ctx);
     match db_type {
         DuckDbType::InMemory => {
             let mut conn = Connection::open_in_memory()?;
@@ -159,6 +196,7 @@ pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
                 COMMENT ON COLUMN dev.domains.censored IS 'did domain fail to pass the censor check (true == bad words found)';",
             ).unwrap();
             tx.commit().unwrap();
+            // span.end();
             Ok(conn)
         },
         DuckDbType::Persistent => {
@@ -195,12 +233,14 @@ pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
                 COMMENT ON COLUMN dev.domains.censored IS 'did domain fail to pass the censor check (true == bad words found)';",
             ).unwrap();
             tx.commit().unwrap();
+            // span.end();
             Ok(conn)
         },
         DuckDbType::Existing => {
             dotenv().ok();
             let dbpath = env::var("DUCKDB_PATH").unwrap_or("./data/duck.db".to_string());
             let conn = Connection::open(&dbpath)?;
+            // span.end();
             Ok(conn)
         }
     }
@@ -216,23 +256,42 @@ pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
     // conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")?;
 }
 
+#[tracing::instrument]
 pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> Result<()> {
+    // let tracer = global::tracer("domain-hunter");
+    // let mut span = tracer.start_with_context("db_import", &ctx);
     dotenv().ok();
     let src_directory = env::var("DUCKDB_EXPORT_TARGET_DIRECTORY").unwrap_or("./duckdb".to_string());
     let mut stmt: Statement;
     let tx = conn.transaction()?;
 
     match source {
-        Some(DuckDbImportSource::Csv) => todo!(),
-        Some(DuckDbImportSource::Json) => todo!(),
-        Some(DuckDbImportSource::Parquet) => todo!(),
-        Some(DuckDbImportSource::SQLite) => todo!(),
-        Some(DuckDbImportSource::PostgreSQL) => todo!(),
+        Some(DuckDbImportSource::Csv) => {
+            // span.end();
+            todo!()
+        },
+        Some(DuckDbImportSource::Json) => {
+            // span.end();
+            todo!()
+        },
+        Some(DuckDbImportSource::Parquet) => {
+            // span.end();
+            todo!()
+        },
+        Some(DuckDbImportSource::SQLite) => {
+            // span.end();
+            todo!()
+        },
+        Some(DuckDbImportSource::PostgreSQL) => {
+            // span.end();
+            todo!()
+        },
         Some(DuckDbImportSource::MySQL) => {
             tx.execute_batch("BEGIN;
                         INSTALL mysql;
                         LOAD mysql;",
             )?;
+            // span.end();
             Ok(())
         },
         Some(DuckDbImportSource::Iceberg) => {
@@ -241,6 +300,7 @@ pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> R
                         LOAD iceberg;
                         UPDATE EXTENSIONS (iceberg);",
             )?;
+            // span.end();
             Ok(())
         },
         Some(DuckDbImportSource::DeltaLake) => {
@@ -248,20 +308,32 @@ pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> R
                         INSTALL delta;
                         LOAD delta;",
             )?;
+            // span.end();
             Ok(())
         },
-        Some(DuckDbImportSource::CloudflareR2) => todo!(),
-        Some(DuckDbImportSource::AzureBlob) => todo!(),
-        Some(DuckDbImportSource::S3) => todo!(),
+        Some(DuckDbImportSource::CloudflareR2) => {
+            // span.end();
+            todo!()
+        },
+        Some(DuckDbImportSource::AzureBlob) => {
+            // span.end();
+            todo!()
+        },
+        Some(DuckDbImportSource::S3) => {
+            // span.end();
+            todo!()
+        },
         _ => {
             stmt = tx.prepare(r"IMPORT DATABASE '?';")?;
             match stmt.execute([src_directory]) {
                 Ok(_) => {
                     tx.commit()?;
+                    // span.end();
                     Ok(())
                 },
                 Err(e) => {
                     tx.rollback()?;
+                    // span.end();
                     Err(e)
                 },
             }
@@ -269,7 +341,10 @@ pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> R
     }
 }
 
+#[tracing::instrument]
 pub fn db_export(conn: &mut Connection, format: DuckDbExportFormat) -> Result<()> {
+    // let tracer = global::tracer("domain-hunter");
+    // let mut span = tracer.start_with_context("db_import", &ctx);
     dotenv().ok();
     let target_directory = env::var("DUCKDB_EXPORT_TARGET_DIRECTORY").unwrap_or("./duckdb".to_string());
     let mut stmt: Statement;
@@ -297,10 +372,12 @@ pub fn db_export(conn: &mut Connection, format: DuckDbExportFormat) -> Result<()
     match stmt.execute([target_directory]) {
         Ok(_) => {
             tx.commit()?;
+            // span.end();
             Ok(())
         },
         Err(e) => {
             tx.rollback()?;
+            // span.end();
             Err(e)
         },
     }
@@ -312,6 +389,14 @@ mod tests {
 
     #[test]
     fn test_insert_domain() {
+
+        let provider = init_tracer_provider().expect("Failed to initialize tracer provider.");
+        global::set_tracer_provider(provider.clone());
+
+        // let tracer = global::tracer("domain-hunter-test");
+        // let mut span = tracer.start("test_insert_domain");
+        // let ctx = Context::current_with_span(parent);
+
         let mut conn = db_init(DuckDbType::InMemory).unwrap();
         let tx = conn.transaction().unwrap();
 
@@ -331,11 +416,20 @@ mod tests {
         
         // Rollback the transaction
         tx.rollback().unwrap();
+        // span.end();
     }
 
     // Try to insert a duplicate domain
     #[test]
     fn test_insert_duplicate_domain() {
+
+        let provider = init_tracer_provider().expect("Failed to initialize tracer provider.");
+        global::set_tracer_provider(provider.clone());
+
+        // let tracer = global::tracer("domain-hunter-test");
+        // let mut span = tracer.start("test_insert_duplicate_domain");
+        // let ctx = Context::current_with_span(parent);
+
         // Start a transaction
         let mut conn = db_init(DuckDbType::InMemory).unwrap();
         let tx = conn.transaction().unwrap();
@@ -360,12 +454,21 @@ mod tests {
         
         // Rollback the transaction
         tx.rollback().unwrap();
+        // span.end();
     }
 
     // Try to insert a domain with a bad name
     #[test]
     #[should_panic]
     fn test_insert_bad_domain() {
+
+        let provider = init_tracer_provider().expect("Failed to initialize tracer provider.");
+        global::set_tracer_provider(provider.clone());
+
+        // let tracer = global::tracer("domain-hunter-test");
+        // let mut span = tracer.start("test_insert_bad_domain");
+        // let ctx = Context::current_with_span(parent);
+
         // Start a transaction
         let mut conn = db_init(DuckDbType::InMemory).unwrap();
         let tx = conn.transaction().unwrap();
@@ -375,6 +478,7 @@ mod tests {
         
         // Rollback the transaction
         tx.rollback().unwrap();
+        // span.end();
     }
 
     // TODO: Try to insert a domain with a bad page rank
