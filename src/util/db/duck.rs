@@ -5,6 +5,8 @@ use duckdb::{
     Statement,
     Transaction
 };
+use struct_iterable::Iterable;
+use std::collections::HashMap;
 use dotenv::dotenv;
 use std::{
     env,
@@ -23,6 +25,7 @@ use opentelemetry::{
     trace::{Tracer, Span}
 };
 
+
 #[derive(Debug, Clone)]
 pub struct Domain {
     id: Option<u64>,
@@ -31,6 +34,26 @@ pub struct Domain {
     valid: Option<bool>,
     pub page_rank: Option<f64>,
     censored: Option<bool>,
+}
+
+// This is used to build dynamic "WHERE" clauses for filtering
+#[derive(Iterable, Debug)]
+pub struct DomainFilter {
+    pub id: Option<u64>,
+    pub name: Option<String>,
+    pub available: Option<bool>,
+    pub valid: Option<bool>,
+    pub page_rank: Option<f64>,
+    pub censored: Option<bool>,
+}
+
+pub enum DomainFilterFields {
+    Id,
+    Name,
+    Available,
+    Valid,
+    PageRank,
+    Censored
 }
 
 #[derive(Debug)]
@@ -59,6 +82,92 @@ pub enum DuckDbImportSource {
 pub enum DuckDbExportFormat {
     Csv,
     Parquet
+}
+
+#[derive(Debug)]
+pub enum DomainApprovedTlds {
+    Com,
+    Net,
+    Org,
+}
+
+impl DomainFilter {
+    pub fn new(obj: Option<&HashMap<DomainFilterFields, Option<String>>>) {
+        let mut filter = DomainFilter {
+            id: None,
+            name: None,
+            available: None,
+            valid: None,
+            page_rank: None,
+            censored: None,
+        };
+        match obj {
+            Some(hm) => {
+                for (k,v) in hm.into_iter() {
+                    match (k, v) {
+                        (DomainFilterFields::Id, Some(val)) => {
+                            filter.id = Some(val.parse::<u64>().unwrap())
+                        },
+                        (DomainFilterFields::Name, Some(val)) => {
+                            filter.name = Some(val.clone())
+                        }
+                        (DomainFilterFields::Available, Some(val)) => {
+                            filter.available = match val.as_str() {
+                                "true" | "1" | "True" | "T" => Some(true),
+                                "false" | "0" | "False" | "F" => Some(false),
+                                _ => panic!("invalid value for available"),
+                            };
+                        }
+                        (DomainFilterFields::Valid, Some(val)) => {
+                            filter.valid = match val.as_str() {
+                                "true" | "1" | "True" | "T" => Some(true),
+                                "false" | "0" | "False" | "F" => Some(false),
+                                _ => panic!("invalid value for available"),
+                            };
+                        }
+                        (DomainFilterFields::PageRank, Some(val)) => {
+                            filter.page_rank = Some(val.parse::<f64>().unwrap())
+                        }
+                        (DomainFilterFields::Censored, Some(val)) => {
+                            filter.censored = match val.as_str() {
+                                "true" | "1" | "True" | "T" => Some(true),
+                                "false" | "0" | "False" | "F" => Some(false),
+                                _ => panic!("invalid value for available"),
+                            };
+                        }
+                        _ => {} // TODO: add trace/log flagging for unknown fields
+                    }
+                }
+                filter
+            }
+            None => filter
+        };
+    }
+    // Generates a WHERE clause for the filter
+    #[tracing::instrument]
+    fn where_clause(&self) -> Option<String> {
+        let mut filters: Vec<String> = Vec::new();
+        for (k,v) in self.iter() {
+            match k {
+                id => filters.push("id = {v}".to_string()), 
+                name => {
+                    let val = v.downcast_ref::<String>().unwrap().as_str();
+                    let mut names: Vec<String> = Vec::new();
+                    for tld in val.split(",") {
+                        names.push("name LIKE '%.{tld}'".to_string())
+                    }
+                },
+                available => filters.push("available = {v}".to_string()),
+                valid => filters.push("valid = {v}".to_string()),
+                censored => filters.push("censored = {v}".to_string()),
+                page_rank => filters.push("page_rank >= {v}".to_string()),
+            }
+        };
+        match filters.len() {
+            0 => None,
+            _ => Some("WHERE ".to_string() + filters.join(" AND ").as_str()),
+        }
+    }
 }
 
 impl Domain {
@@ -97,8 +206,6 @@ impl Domain {
 #[tracing::instrument]
 #[cfg(debug_assertions)]
 pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
-    // let tracer = global::tracer("domain-hunter");
-    // let mut span = tracer.start_with_context("insert_domain", &ctx);
     let mut stmt: Statement;
     stmt = tx.prepare("INSERT OR REPLACE INTO dev.domains (id, name, available, valid, page_rank, censored) VALUES (?, ?, ?, ?, ?, ?)")?;
     stmt.execute(params![
@@ -109,15 +216,12 @@ pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
         domain.page_rank,
         domain.censored,
     ])?;
-    // span.end();
     Ok(())
 }
 
 #[tracing::instrument]
 #[cfg(not(debug_assertions))]
 pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
-    // let tracer = global::tracer("domain-hunter");
-    // let mut span = tracer.start_with_context("insert_domain", &ctx);
     let mut stmt: Statement;
     stmt = tx.prepare("INSERT OR REPLACE INTO prod.domains (id, name, available, valid, page_rank, censored) VALUES (?, ?, ?, ?, ?, ?)")?;
     stmt.execute(params![
@@ -128,14 +232,11 @@ pub fn insert_domain(tx: &Transaction, domain: &Domain) -> Result<()> {
         domain.page_rank,
         domain.censored,
     ])?;
-    // span.end();
     Ok(())
 }
 
 #[tracing::instrument]
 pub fn update_domains(conn: &mut Connection, domain: &Domain) -> Result<()> {
-    // let tracer = global::tracer("domain-hunter");
-    // let mut span = tracer.start_with_context("update_domains", &ctx);
     let mut stmt: Statement;
     let tx = conn.transaction()?;
     stmt = tx.prepare("UPDATE id, name, available, valid, page_rank, censored INTO dev.domains VALUES (?, ?, ?, ?, ?, ?)")?;
@@ -148,29 +249,52 @@ pub fn update_domains(conn: &mut Connection, domain: &Domain) -> Result<()> {
         domain.censored,
     ])?;
     tx.commit()?;
-    // span.end();
     Ok(())
 }
 
 #[tracing::instrument]
-pub fn list_valid_domains(conn: &Connection) -> Result<Vec<String>> {
-    // let tracer = global::tracer("domain-hunter");
-    // let mut span = tracer.start_with_context("list_valid_domains", &ctx);
-    let mut stmt = conn.prepare("SELECT name FROM dev.domains WHERE valid = true AND page_rank > 0 AND name LIKE '%.com' AND name LIKE '%.net' AND name LIKE '%.org' AND censored = false")?;
+#[cfg(debug_assertions)]
+pub fn list_domains(conn: &Connection, filter: DomainFilter) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT name FROM prod.domains WHERE valid = true AND page_rank > 0 AND (name LIKE '%.com' OR name LIKE '%.net' OR name LIKE '%.org') AND censored = false")?;
     let mut rows = stmt.query([])?;
 
     let mut domains = Vec::new();
     while let Some(row) = rows.next()? {
         domains.push(row.get(0)?);
     }
-    // span.end();
+    Ok(domains)
+}
+
+#[tracing::instrument]
+#[cfg(not(debug_assertions))]
+pub fn list_domains(conn: &Connection, filter: DomainFilter) -> Result<Vec<String>> {
+    // valid = true 
+    // page_rank > 0 
+    // name LIKE '%.com' AND name LIKE '%.net' AND name LIKE '%.org' 
+    // censored = false
+    let mut stmt = conn.prepare("SELECT name FROM dev.domains ?")?;
+    let mut domains = Vec::new();
+    
+    match filter.where_clause() {
+        Some(where_clause) => {
+            let mut rows = stmt.query([where_clause])?;
+            while let Some(row) = rows.next()? {
+                domains.push(row.get(0)?);
+            }
+        },
+        None => {
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                domains.push(row.get(0)?);
+            }
+        }
+    }
+
     Ok(domains)
 }
 
 #[tracing::instrument]
 pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
-    // let tracer = global::tracer("domain-hunter");
-    // let mut span = tracer.start_with_context("db_init", &ctx);
     match db_type {
         DuckDbType::InMemory => {
             let mut conn = Connection::open_in_memory()?;
@@ -196,7 +320,6 @@ pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
                 COMMENT ON COLUMN dev.domains.censored IS 'did domain fail to pass the censor check (true == bad words found)';",
             ).unwrap();
             tx.commit().unwrap();
-            // span.end();
             Ok(conn)
         },
         DuckDbType::Persistent => {
@@ -212,7 +335,6 @@ pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
                 }
             }
             let mut conn = Connection::open(&dbpath)?;
-            println!("DB PATH: {:?}", conn.path());
             let tx = conn.transaction().unwrap();
             tx.execute_batch("
                 CREATE SCHEMA IF NOT EXISTS dev;
@@ -235,14 +357,12 @@ pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
                 COMMENT ON COLUMN dev.domains.censored IS 'did domain fail to pass the censor check (true == bad words found)';",
             ).unwrap();
             tx.commit().unwrap();
-            // span.end();
             Ok(conn)
         },
         DuckDbType::Existing => {
             dotenv().ok();
             let dbpath = env::var("DUCKDB_PATH").unwrap_or("./data/duck.db".to_string());
             let conn = Connection::open(&dbpath)?;
-            // span.end();
             Ok(conn)
         }
     }
@@ -260,8 +380,6 @@ pub fn db_init(db_type: DuckDbType) -> Result<Connection, duckdb::Error> {
 
 #[tracing::instrument]
 pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> Result<()> {
-    // let tracer = global::tracer("domain-hunter");
-    // let mut span = tracer.start_with_context("db_import", &ctx);
     dotenv().ok();
     let src_directory = env::var("DUCKDB_EXPORT_TARGET_DIRECTORY").unwrap_or("./duckdb".to_string());
     let mut stmt: Statement;
@@ -269,23 +387,18 @@ pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> R
 
     match source {
         Some(DuckDbImportSource::Csv) => {
-            // span.end();
             todo!()
         },
         Some(DuckDbImportSource::Json) => {
-            // span.end();
             todo!()
         },
         Some(DuckDbImportSource::Parquet) => {
-            // span.end();
             todo!()
         },
         Some(DuckDbImportSource::SQLite) => {
-            // span.end();
             todo!()
         },
         Some(DuckDbImportSource::PostgreSQL) => {
-            // span.end();
             todo!()
         },
         Some(DuckDbImportSource::MySQL) => {
@@ -293,7 +406,6 @@ pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> R
                         INSTALL mysql;
                         LOAD mysql;",
             )?;
-            // span.end();
             Ok(())
         },
         Some(DuckDbImportSource::Iceberg) => {
@@ -302,7 +414,6 @@ pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> R
                         LOAD iceberg;
                         UPDATE EXTENSIONS (iceberg);",
             )?;
-            // span.end();
             Ok(())
         },
         Some(DuckDbImportSource::DeltaLake) => {
@@ -310,19 +421,15 @@ pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> R
                         INSTALL delta;
                         LOAD delta;",
             )?;
-            // span.end();
             Ok(())
         },
         Some(DuckDbImportSource::CloudflareR2) => {
-            // span.end();
             todo!()
         },
         Some(DuckDbImportSource::AzureBlob) => {
-            // span.end();
             todo!()
         },
         Some(DuckDbImportSource::S3) => {
-            // span.end();
             todo!()
         },
         _ => {
@@ -330,12 +437,10 @@ pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> R
             match stmt.execute([src_directory]) {
                 Ok(_) => {
                     tx.commit()?;
-                    // span.end();
                     Ok(())
                 },
                 Err(e) => {
                     tx.rollback()?;
-                    // span.end();
                     Err(e)
                 },
             }
@@ -345,8 +450,6 @@ pub fn db_import(conn: &mut Connection, source: Option<DuckDbImportSource>) -> R
 
 #[tracing::instrument]
 pub fn db_export(conn: &mut Connection, format: DuckDbExportFormat) -> Result<()> {
-    // let tracer = global::tracer("domain-hunter");
-    // let mut span = tracer.start_with_context("db_import", &ctx);
     dotenv().ok();
     let target_directory = env::var("DUCKDB_EXPORT_TARGET_DIRECTORY").unwrap_or("./duckdb".to_string());
     let mut stmt: Statement;
@@ -374,12 +477,10 @@ pub fn db_export(conn: &mut Connection, format: DuckDbExportFormat) -> Result<()
     match stmt.execute([target_directory]) {
         Ok(_) => {
             tx.commit()?;
-            // span.end();
             Ok(())
         },
         Err(e) => {
             tx.rollback()?;
-            // span.end();
             Err(e)
         },
     }
@@ -418,7 +519,6 @@ mod tests {
         
         // Rollback the transaction
         tx.rollback().unwrap();
-        // span.end();
     }
 
     // Try to insert a duplicate domain
@@ -456,7 +556,6 @@ mod tests {
         
         // Rollback the transaction
         tx.rollback().unwrap();
-        // span.end();
     }
 
     // Try to insert a domain with a bad name
@@ -480,7 +579,6 @@ mod tests {
         
         // Rollback the transaction
         tx.rollback().unwrap();
-        // span.end();
     }
 
     // TODO: Try to insert a domain with a bad page rank
